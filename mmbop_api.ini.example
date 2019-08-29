@@ -1,0 +1,18 @@
+# mmbop_api.ini
+#
+# This file contains the SHA224 hash of the authentication token
+#
+# One way to generate this string is by running python interpreter
+# directly:
+#
+# $ python3 -q
+# >>> import hashlib
+# >>> my_token = 'th1sisn0taverys3cur3t0ken'
+# >>> hash_token = hashlib.sha224(my_token.encode()).hexdigest()
+# >>> print(hash_token)
+# 1190666fa5b13d8a7e0e99103a1ed394c3f55a59d42ac000b69dddb3
+#
+# Needless to say, change the default hash shown below
+#
+[DEFAULT]
+token:1190666fa5b13d8a7e0e99103a1ed394c3f55a59d42ac000b69dddb3

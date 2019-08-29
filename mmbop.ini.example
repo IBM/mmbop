@@ -1,0 +1,81 @@
+# mmbop.py configuration file
+#
+# This file should be called mmbop.ini and located in the same
+# directory as mmbop.py. If not, you will need to specify
+# the location of this file when calling mmbop (using -c).
+
+## RNDC configuration
+#
+# server:  The interface IP that BIND accepts rndc calls to
+# port:    The TCP port that rndc uses
+# keyfile: The location of the key that BIND accepts
+#          Note: whatever user is calling mmbop needs to
+#                have read access to this key
+# path:    The full path to rndc executable
+#
+[RNDC]
+server: 127.0.0.1
+port: 953
+keyfile: /etc/bind/rndc.key
+path: /usr/sbin/rndc
+
+## DNS configuration
+#
+# dns1:     The FQDN of the primary DNS server
+# dns2:     The FQDN of the secondary DNS server
+#           Note: These are to be used as the NS records
+#                 of the skeleton zone file
+# serial:   The starting serial number for a new zone
+# view:     The view in named.conf where zones files are located
+# owner:    The owner email required in the SOA record for a zone
+# namedir:  The directory where the zone files are located
+# nameown:  The owner of the zone files
+# namegrp:  The group that owns the zone files
+# nameper:  The file permissions (octal) for the zone files
+[DNS]
+dns1: ns1.example.com
+dns2: ns2.example.com
+serial: 1
+# only uncomment and use if your named.conf files use views
+#view: default
+owner: hostmaster.example.com
+namedir: /etc/bind
+nameown: bind
+namegrp: bind
+nameper: 0644
+
+## MMBOP configuration
+#
+# Note that all of these fields are optional. Multiple
+# values for a field are separated by the pipe symbol '|'
+#
+# protect: A list of domains that mmbop is not allowed to
+#          manage. The path is exact, so subdomains (unless
+#          explicitly added to this list) will be manageable.
+#
+# require: A list of substrings that must be present in a
+#          zone manage request. Specifically the substrings
+#          must be located at the end of the zone name.
+#          The entries are treated as an OR (must contain at
+#          least one of the entries to be considered valid).
+#
+# options: List of strings to include in the zone definition;
+#          such as specifying a key that can manage it
+#
+# catalog: The name of the catalog zone (if implemented)
+#          Catalog zones allow secondary DNS servers to receive
+#          new zone info from the master and add it to their
+#          configuration automatically. If catalog zone is not
+#          implemented, you will have to separately update
+#          the secondary DNS named.conf so it will know to receive
+#          updates from master and serve the domain.
+#
+# If implementing any of the above optional fields, uncomment the
+# the field values appropriate to your environment. Default values
+# given here likely won't work for you and are provided just to
+# demonstrate syntax.
+[MMBOP]
+protect: example.com|example.net
+require: .example.com|.example.net
+options: also-notify { 10.10.10.1; };|allow-update { key "myddnskey"; };
+catalog: catalog.example

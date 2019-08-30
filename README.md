@@ -178,7 +178,7 @@ optional arguments:
   -z ZONE, --zonestatus ZONE  Show status of specified zone
 ```
 
-Note that the list option, *-l*, will only show the domains that mmbop can manage (using same validation criteria as for adding/removing zones) - see above for the protect/require configuration.
+Note that the list option, *-l*, will only show the domains that mmbop can manage (using same validation criteria as for adding/removing zones) - see above for the protect/require configuration. Also note that list works by running 'rndc dumpdb -zones' and then parses this file to obtain the applicable domains. It has to wait for the dump file to complete writing, which can take a surprisingly long (relatively speaking) time - 6+ seconds if you have a lot of large zone files.
 
 ## API
 

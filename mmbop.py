@@ -1,4 +1,3 @@
-#!/usr/local/bin/python3.7
 """
 
 mmbop.py

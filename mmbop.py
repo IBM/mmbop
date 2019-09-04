@@ -27,6 +27,7 @@ import argparse
 import configparser
 import grp
 import hashlib
+import ipaddress
 import logging
 import os
 import pwd
@@ -34,6 +35,86 @@ import re
 import sys
 import subprocess
 from time import sleep
+
+class DigQueryError(Exception):
+    """
+    Error class for DigQuery
+    """
+    pass
+
+class DigQuery(object):
+    """
+    Instantiates a DNS querier using system dig
+    """
+
+    def __init__(self, path_to_dig='/usr/bin/dig'):
+        if os.path.exists(path_to_dig) and os.path.isfile(path_to_dig):
+            self.command = [path_to_dig, '@127.0.0.1']
+            self.options = ['+noall', '+answer']
+        else:
+            raise DigQueryError('Invalid path to dig')
+
+    def _call(self, command_to_dig, query_type=None):
+        """
+        Makes subprocess call to dig, returns tuple of form:
+        (boolean:success_failure, string:stdout_stderr)
+        """
+        if isinstance(command_to_dig, str):
+            command_to_dig = [command_to_dig]
+        if query_type:
+            dig_command = self.command + command_to_dig +[query_type] + self.options
+        else:
+            dig_command = self.command + command_to_dig + self.options
+        reply = subprocess.run(dig_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               universal_newlines=True)
+        if reply.returncode == 0:
+            return (True, reply.stdout)
+        return (False, reply.stderr)
+
+    @staticmethod
+    def _parse_call(dig_response):
+        """
+        If the response is blank lines, return None
+        otherwise, return the non-empty line(s)
+        """
+        (success, message) = dig_response
+        logging.debug(message)
+        return_lines = []
+        if not success:
+            return None
+        answer_lines = message.split('\n')
+        logging.debug(str(len(answer_lines)))
+        for line in answer_lines:
+            if line.startswith(';'):
+                continue
+            if not line.strip():
+                continue
+            return_lines.append(line)
+        return return_lines
+
+    def find_record(self, fqdn_or_ip):
+        """
+        Return result (or None if not found)
+        """
+        try:
+            ip_address = ipaddress.ip_address(fqdn_or_ip)
+            answer = self._parse_call(self._call(ip_address.reverse_pointer, 'PTR'))
+        except ValueError:
+            answer = self._parse_call(self._call(fqdn_or_ip))
+        return answer
+
+    def search_domain(self, zone_name, search_string):
+        """
+        Perform a dig transfer and grep through results, returning
+        those that match search_string
+        """
+        records = self._parse_call(self._call(['axfr', zone_name]))
+        match_list = []
+        for record in records:
+            if search_string in record:
+                match_list.append(record)
+        return match_list
+
 
 class NSUpdateError(Exception):
     """
@@ -43,17 +124,20 @@ class NSUpdateError(Exception):
 
 class NSUpdate(object):
     """
-    Handles communication with nsupdate
+    Handles communication with nsupdate and dig
     """
 
     CATALOG = 'zone {czone}\n'
     CATALOG += 'update {action} {hname}.zones.{czone} 3600 IN PTR {zname}.\n'
     CATALOG += 'send\n'
+    FORWARD = 'update {action} {fqdn} 86400 A {addr}\n'
+    REVERSE = 'update {action} {addr} 86400 PTR {fqdn}.\n'
     TEMP_DIR = '/tmp'
 
-    def __init__(self, path='/usr/bin/nsupdate', key=None):
+    def __init__(self, path='/usr/bin/nsupdate', key=None, dig_path='/usr/bin/dig'):
         """
         Raise NSUpdateError if the path to nsupdate is invalid
+        If dig path is invalid, cannot perform queries (but does not raise error)
         """
         if os.path.exists(path) and os.path.isfile(path):
             # set nsupdate to always use TCP and enforce local mode
@@ -62,8 +146,12 @@ class NSUpdate(object):
                 self.command.extend(['-k', key])
         else:
             raise NSUpdateError('Invalid path %s' % path)
+        if os.path.exists(dig_path) and os.path.isfile(dig_path):
+            self.dig_command = [path, '@127.0.0.1']
+        else:
+            self.dig_command = None
 
-    def call(self, catalog_zone, domain, action='add'):
+    def call_zone(self, catalog_zone, domain, action='add'):
         """
         Call nsupdate to modify the catalog zone
         """
@@ -76,19 +164,55 @@ class NSUpdate(object):
         logging.debug('nsupdate failed: %s', reply.stderr)
         return (False, reply.stderr)
 
-    def add(self, catalog_zone, domain_to_add):
+    def add_zone(self, catalog_zone, domain_to_add):
         """
         Add the specified domain to catalog
         """
-        return self.call(catalog_zone, domain_to_add)
+        return self.call_zone(catalog_zone, domain_to_add)
 
-    def delete(self, catalog_zone, domain_to_remove):
+    def delete_zone(self, catalog_zone, domain_to_remove):
         """
         Remove the specified domain from catalog
         """
         action = 'delete'
-        return self.call(catalog_zone, domain_to_remove, action)
+        return self.call_zone(catalog_zone, domain_to_remove, action)
 
+    def add_host(self, fqdn, ip_addr, force=False):
+        """
+        Add both A and PTR records for the specified host
+        This checks to make sure:
+            1. There is not an existing A or CNAME record for fqdn
+            2. There is not an existing PTR record for ip_addr
+        If there is an existing record, then:
+            1. If force is False, the add is cancelled
+            2. If force is True, the existing records are
+               deleted and the add is attempted
+        Returns a tuple of form: (Boolean, String), where
+        boolean indicates success/failure of the add, and string
+        provides message indicating why.
+        """
+        pass
+
+
+    def query_dig(self, record_to_query, query_type=None):
+        """
+        Run dig and return answer or None if it doesn't exist
+        """
+        if not self.dig_command:
+            logging.debug('No access to dig command, unable to run queries')
+            return None
+        valid_query_types = ['A', 'PTR', 'CNAME']
+        dig_commands = self.dig_command + [record_to_query]
+        if query_type not in valid_query_types:
+            query_type = None
+        dig_after = ['+noall', '+answer']
+        if query_type:
+            dig_after.insert(0, query_type)
+        dig_commands.extend(dig_after)
+        logging.debug('Calling dig with following commands: %s', str(dig_commands))
+        dig_result = subprocess.run(dig_commands, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, universal_newlines=True)
+        return dig_result
 
     @staticmethod
     def hex_digest_format(domain_name):
@@ -169,68 +293,54 @@ class RNDC(object):
         calling this function (ie, added to the mmbop.ini configuration)
         or modify the 'get' statements below to set fallback values
         """
+        defaults = {'keyfile': '/etc/bind/rndc.key',
+                    'server': '127.0.0.1',
+                    'port': 953,
+                    'path': '/usr/sbin/rndc',
+                    'dns1': 'ns1.example.com',
+                    'dns2': 'ns2.example.com',
+                    'serial': 1,
+                    'view': None,
+                    'owner': 'hostmaster.example.com',
+                    'protect': [],
+                    'require': [],
+                    'namedir': '/etc/bind',
+                    'nameown': 'bind',
+                    'namegrp': 'bind',
+                    'nameper': '0644',
+                    'options': [],
+                    'catalog': None,
+                   }
         self.info = {}
-        keyfile = kwargs.get('keyfile', '/etc/bind/rndc.key')
-        server = kwargs.get('server', '127.0.0.1')
-        port = str(kwargs.get('port', 953))
-        path = kwargs.get('path', '/usr/sbin/rndc')
-        dns1 = kwargs.get('dns1', 'ns1.example.com')
-        dns2 = kwargs.get('dns2', 'ns2.example.com')
-        serial = str(kwargs.get('serial', 1))
-        view = kwargs.get('view', None)
-        owner = kwargs.get('owner', 'hostmaster.example.com')
-        protect = kwargs.get('protect', [])
-        require = kwargs.get('require', [])
-        namedir = kwargs.get('namedir', '/etc/bind/')
-        nameown = kwargs.get('nameown', 'bind')
-        namegrp = kwargs.get('namegrp', 'bind')
-        nameper = kwargs.get('nameper', '0644')
-        options = kwargs.get('options', [])
-        catalog = kwargs.get('catalog', None)
-        if not namedir.endswith('/'):
-            namedir += '/'
-        if os.path.exists(path) and os.path.isfile(path):
-            self.info['exec'] = path
-        else:
-            raise RNDCError('Invalid path to rndc: %s' % path)
-        if os.path.exists(keyfile) and os.path.isfile(keyfile):
-            self.info['key'] = keyfile
-            self.info['server'] = server
-            self.info['port'] = port
-        else:
-            raise RNDCError('Key file %s not found or invalid' % keyfile)
-        self.info['dns'] = [dns1, dns2]
-        self.info['serial'] = serial
-        self.info['view'] = view
-        self.info['owner'] = owner
-        if isinstance(protect, str):
-            self.info['protect'] = [protect]
-        else:
-            self.info['protect'] = protect
-        if isinstance(require, str):
-            self.info['require'] = [require]
-        else:
-            self.info['require'] = require
-        self.info['namedir'] = namedir
-        self.info['nameown'] = nameown
-        self.info['namegrp'] = namegrp
+        for key, value in defaults:
+            self.info.setdefault(key, kwargs.get(key, value))
+        self.info['port'] = str(self.info['port'])
+        self.info['serial'] = str(self.info['serial'])
+        if not self.info['namedir'].endswith('/'):
+            self.info['namedir'] += '/'
+        if not (os.path.exists(self.info['path']) and os.path.isfile(self.info['path'])):
+            raise RNDCError('Invalid path to rndc: %s' % self.info['path'])
+        if not (os.path.exists(self.info['keyfile']) and os.path.isfile(self.info['keyfile'])):
+            raise RNDCError('Key file %s not found or invalid' % self.info['keyfile'])
+        self.info['dns'] = [self.info['dns1'], self.info['dns2']]
+        if isinstance(self.info['protect'], str):
+            self.info['protect'] = [self.info['protect']]
+        if isinstance(self.info['require'], str):
+            self.info['require'] = [self.info['require']]
         try:
-            self.info['nameper'] = int(nameper, base=8)
+            self.info['nameper'] = int(self.info['nameper'], base=8)
         except ValueError:
             self.info['nameper'] = 0o644  # Octal format for Python3
-        if isinstance(options, str):
-            self.info['options'] = [options]
-        else:
-            self.info['options'] = options
-        self.info['catalog'] = catalog
+        if isinstance(self.info['options'], str):
+            self.info['options'] = [self.info['options']]
 
     def call(self, rndc_command):
         """
         Use subprocess.run to make call to rndc, return result as
         a CompletedProcess instance.
         """
-        command = [self.info['exec']]
-        command.extend(['-k', self.info['key'], '-s', self.info['server']])
+        command = [self.info['path']]
+        command.extend(['-k', self.info['keyfile'], '-s', self.info['server']])
         command.extend(['-p', self.info['port']])
         if isinstance(rndc_command, list):
             command.extend(rndc_command)
@@ -388,15 +498,15 @@ class RNDC(object):
         """
         Use nsupdate to modify the catalog zone file
         """
-        my_nsupdate = NSUpdate(key=self.info['key'])
-        return my_nsupdate.add(self.info['catalog'], zone_name)
+        my_nsupdate = NSUpdate(key=self.info['keyfile'])
+        return my_nsupdate.add_zone(self.info['catalog'], zone_name)
 
     def delete_from_catalog(self, zone_name):
         """
         Use nsupdate to remove the domain from the catalog zone file
         """
-        my_nsupdate = NSUpdate(key=self.info['key'])
-        return my_nsupdate.delete(self.info['catalog'], zone_name)
+        my_nsupdate = NSUpdate(key=self.info['keyfile'])
+        return my_nsupdate.delete_zone(self.info['catalog'], zone_name)
 
     def write_zone_file(self, zone_name, zone_file):
         """
@@ -521,11 +631,17 @@ def parse_arguments():
     parser.add_argument('-c', '--config', metavar='FILE', help='Location of mmbop config file',
                         default='./mmbop.ini')
     group = parser.add_mutually_exclusive_group()
-    group.add_argument('-a', '--add', metavar='ZONE', help='Add specified zone')
-    group.add_argument('-d', '--delete', metavar='ZONE', help='Delete specified zone')
-    group.add_argument('-l', '--list', action='store_true', help='List all zones')
-    group.add_argument('-s', '--status', action='store_true', help='Show status of DNS server')
-    group.add_argument('-z', '--zonestatus', metavar='ZONE', help='Show status of specified zone')
+    group.add_argument('--status', action='store_true', help='Show status of DNS server')
+    group.add_argument('--hostquery', metavar='FQDN|IP', help='Query DNS for specified record')
+    group.add_argument('--hostadd', nargs=2, metavar=('FQDN', 'IP'), help='Add A and PTR record')
+    group.add_argument('--hostdelete', metavar='FQDN|IP', help='Delete A and PTR (provide either)')
+    group.add_argument('--hostlist', metavar='ZONE', help='List all records for specified zone')
+    group.add_argument('--zoneadd', metavar='ZONE', help='Add specified zone')
+    group.add_argument('--zonedelete', metavar='ZONE', help='Delete specified zone')
+    group.add_argument('--zonelist', action='store_true', help='List all zones')
+    group.add_argument('--zonesearch', nargs=2, metavar=('ZONE', 'SEARCH'),
+                       help='Wildcard searching of zone records')
+    group.add_argument('--zonestatus', metavar='ZONE', help='Show status of specified zone')
     if len(sys.argv) == 1:    # No action is provided
         parser.print_help(sys.stderr)
         sys.exit(1)
@@ -540,6 +656,49 @@ def set_logging(debug_flag=False):
     else:
         logging.basicConfig(level=logging.INFO)
 
+def hostquery(dig_instance, host_to_query):
+    """
+    Handle hostquery request
+    """
+    replies = dig_instance.find_record(host_to_query)
+    for line in replies:
+        print(line)
+
+def zonesearch(dig_instance, zone_to_search, search_value):
+    """
+    Handle zonesearch request
+    """
+    matches = dig_instance.search_domain(zone_to_search, search_value)
+    for line in matches:
+        print(line)
+
+def zonelist(rndc_instance):
+    """
+    Handle zonelist request
+    """
+    zones = rndc_instance.list_zones()
+    if not zones:
+        print('Unable to get list of zones. Run debug for more info.')
+        exit(1)
+    zone_list = zones.split(' ')
+    for zone in zone_list:
+        print(zone)
+
+def zonemodify(rndc_instance, zone_to_modify, delete=False):
+    """
+    Handle zoneadd and zonedelete request
+    """
+    action = 'Add'
+    if delete:
+        action = 'Deletion'
+        (success, message) = rndc_instance.delete(zone_to_modify)
+    else:
+        (success, message) = rndc_instance.add(zone_to_modify)
+    if not success:
+        print('%s of zone %s failed: %s' % (action, zone_to_modify, message))
+    else:
+        print('%s of zone %s succeeded' % (action, zone_to_modify))
+
 def main():
     """
     Direct calling function
@@ -547,32 +706,22 @@ def main():
     my_args = parse_arguments()
     set_logging(my_args.verbose)
     my_conf = read_config(my_args.config)
+    my_dig = DigQuery()
     my_rndc = RNDC.create(**my_conf)
+    if my_args.hostquery:
+        hostquery(my_dig, my_args.hostquery)
     if my_args.status:
         print(my_rndc.status())
     if my_args.zonestatus:
         print(my_rndc.zonestatus(my_args.zonestatus))
-    if my_args.list:
-        zones = my_rndc.list_zones()
-        if not zones:
-            print('Unable to get list of zones. Run debug for more info.')
-            exit(1)
-        zone_list = zones.split(' ')
-        for zone in zone_list:
-            print(zone)
-    if my_args.add:
-        (success, message) = my_rndc.add(my_args.add)
-        if not success:
-            print('Add of zone %s failed: %s' % (my_args.add, message))
-        else:
-            print('Zone %s added' % my_args.add)
-    if my_args.delete:
-        (success, message) = my_rndc.delete(my_args.delete)
-        if not success:
-            print('Deletion of zone %s failed: %s' % (my_args.delete, message))
-        else:
-            print('Zone %s deleted' % my_args.delete)
-
+    if my_args.zonesearch:
+        zonesearch(my_dig, my_args.zonesearch[0], my_args.zonesearch[1])
+    if my_args.zonelist:
+        zonelist(my_rndc)
+    if my_args.zoneadd:
+        zonemodify(my_rndc, my_args.zoneadd)
+    if my_args.zonedelete:
+        zonemodify(my_rndc, my_args.zonedelete)
 
 if __name__ == "__main__":
     main()

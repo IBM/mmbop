@@ -32,7 +32,6 @@ import logging
 import os
 import pwd
 import re
-import sys
 import subprocess
 from time import sleep
 
@@ -92,7 +91,7 @@ class DigQuery(object):
             return_lines.append(line)
         return return_lines
 
-    def find_record(self, fqdn_or_ip):
+    def find_record(self, fqdn_or_ip, strict=False):
         """
         Return result (or None if not found)
         """
@@ -101,18 +100,28 @@ class DigQuery(object):
             answer = self._parse_call(self._call(ip_address.reverse_pointer, 'PTR'))
         except ValueError:
             answer = self._parse_call(self._call(fqdn_or_ip))
+        if strict:
+            strict_answer = []
+            for line in answer:
+                strict_answer.append(line.split()[-1])
+            return strict_answer
         return answer
 
-    def search_domain(self, zone_name, search_string):
+    def search_domain(self, zone_name, search_string, negate=False):
         """
         Perform a dig transfer and grep through results, returning
-        those that match search_string
+        those that match search_string.
+        If negate is True, return entries that do not match the string.
         """
         records = self._parse_call(self._call(['axfr', zone_name]))
         match_list = []
         for record in records:
-            if search_string in record:
-                match_list.append(record)
+            if negate:
+                if search_string not in record:
+                    match_list.append(record)
+            else:
+                if search_string in record:
+                    match_list.append(record)
         return match_list
 
 
@@ -124,7 +133,7 @@ class NSUpdateError(Exception):
 
 class NSUpdate(object):
     """
-    Handles communication with nsupdate and dig
+    Handles communication with nsupdate
     """
 
     CATALOG = 'zone {czone}\n'
@@ -134,10 +143,11 @@ class NSUpdate(object):
     REVERSE = 'update {action} {addr} 86400 PTR {fqdn}.\n'
     TEMP_DIR = '/tmp'
 
-    def __init__(self, path='/usr/bin/nsupdate', key=None, dig_path='/usr/bin/dig'):
+    def __init__(self, path='/usr/bin/nsupdate', key=None):
         """
-        Raise NSUpdateError if the path to nsupdate is invalid
-        If dig path is invalid, cannot perform queries (but does not raise error)
+        Raise NSUpdateError if the path to nsupdate is invalid.
+        if unable to create a DigQuery instance, set to None, which
+        means modifying host records will not be possible.
         """
         if os.path.exists(path) and os.path.isfile(path):
             # set nsupdate to always use TCP and enforce local mode
@@ -146,10 +156,10 @@ class NSUpdate(object):
                 self.command.extend(['-k', key])
         else:
             raise NSUpdateError('Invalid path %s' % path)
-        if os.path.exists(dig_path) and os.path.isfile(dig_path):
-            self.dig_command = [path, '@127.0.0.1']
-        else:
-            self.dig_command = None
+        try:
+            self.dig = DigQuery()
+        except DigQueryError:
+            self.dig = None
 
     def call_zone(self, catalog_zone, domain, action='add'):
         """
@@ -157,6 +167,18 @@ class NSUpdate(object):
         """
         nsupdate_form = self.format_catalog(catalog_zone, domain, action)
         reply = subprocess.run(self.command, encoding='utf-8', input=nsupdate_form,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if reply.returncode == 0:
+            logging.debug('nsupdate completed successfully: %s', reply.stdout)
+            return (True, None)
+        logging.debug('nsupdate failed: %s', reply.stderr)
+        return (False, reply.stderr)
+
+    def call_modify(self, commands):
+        """
+        Send commands to nsupdate (for add/delete of A/CNAME/PTR records)
+        """
+        reply = subprocess.run(self.command, encodings='utf-8', input=commands,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if reply.returncode == 0:
             logging.debug('nsupdate completed successfully: %s', reply.stdout)
@@ -174,10 +196,59 @@ class NSUpdate(object):
         """
         Remove the specified domain from catalog
         """
-        action = 'delete'
-        return self.call_zone(catalog_zone, domain_to_remove, action)
+        return self.call_zone(catalog_zone, domain_to_remove, 'delete')
 
-    def add_host(self, fqdn, ip_addr, force=False):
+    def _existing_record_info(self, fqdn_or_ip):
+        """
+        Used by add and delete methods, performs checks on the
+        find_record results from dig and returns a dict of the form:
+        {
+            'record_type': A|CNAME|PTR,
+            'record_ansr': The_full_answer_to_query
+            'record_last': The_strict_answer_to_query
+        }
+        If record is not found, dict will be empty.
+        """
+        dig_reply = self.dig.find_record(fqdn_or_ip)
+        if not dig_reply:
+            return None
+        if ' CNAME ' in dig_reply[0]:
+            reply_dict = {
+                'record_type': 'CNAME',
+                'record_ansr': dig_reply[0],
+                'record_last': dig_reply[0].split()[-1]
+                }
+            return reply_dict
+        elif ' A ' in dig_reply[0]:
+            reply_dict = {
+                'record_type': 'A',
+                'record_ansr': dig_reply,
+                'record_last': [x.split()[-1] for x in dig_reply]
+                }
+            return reply_dict
+        elif ' PTR ' in dig_reply[0]:
+            reply_dict = {
+                'record_type': 'PTR',
+                'record_ansr': dig_reply,
+                'record_last': [x.split()[-1] for x in dig_reply]
+                }
+            return reply_dict
+        return None
+
+    def _find_assoc_alias(self, fqdn):
+        """
+        Given fqdn, perform a wildcard search for that record,
+        looking for alias (CNAME) entries that refer to it.
+        """
+        aliases = []
+        (shortname, zone) = fqdn.split('.', 1)
+        matches = self.dig.search_domain(zone, shortname)
+        for match in matches:
+            if fqdn in match and 'CNAME' in match:
+                aliases.append(match)
+        return aliases
+
+    def add_record(self, fqdn, ip_addr, force=False):
         """
         Add both A and PTR records for the specified host
         This checks to make sure:
@@ -193,26 +264,120 @@ class NSUpdate(object):
         """
         pass
 
+    def delete_record(self, fqdn_or_ip, force=False):
+        """
+        Given a FQDN or IP address, remove the forward and reverse entries
+        associated with it.
+        Methodology:
+            1. If removing an A entry, make sure there are no aliases that
+               refer to it. If there are, fail unless force is True. If
+               fail is True, also remove the associated alias records.
+            2. If removing a round-robin forward entry, delete all of the
+               forward and reverse entries
+            3. If removing a round-robin reverse entry, only remove
+               that specific reverse and associated forward entry
+            4. If removing an alias, just remove that (do not touch any
+               related A/PTR records)
+        """
+        logging.debug('Recieved request to delete %s', fqdn_or_ip)
+        deletes = {'A': [], 'PTR': [], 'CNAME': []}
+        existing = self._existing_record_info(fqdn_or_ip)
+        if existing:
+            logging.debug('Record found')
+            if existing['record_type'] == 'A':
+                logging.debug('Record type is A, looking for associated aliases')
+                associated_aliases = self._find_assoc_alias(fqdn_or_ip)
+                if associated_aliases:
+                    logging.debug('Found aliases %s', associated_aliases)
+                    if not force:
+                        return (False, 'Found associated aliases, use force to delete')
+                    else:
+                        logging.debug('Adding aliases to delete request')
+                        deletes['CNAME'].extend(associated_aliases)
+                else:
+                    logging.debug('No associated aliases found')
+                logging.debug('Searching for matching PTR record')
+                for answer in existing['record_ansr']:
+                    ip_addr = answer.split()[-1]
+                    logging.debug('Looking for PTR record for %s', ip_addr)
+                    ptr_record = self.dig.find_record(ip_addr)
+                    if ptr_record:
+                        logging.debug('PTR record found')
+                        ptr_a_ref = ptr_record[0].split()[-1]
+                        if ptr_a_ref.endswith('.'):
+                            ptr_a_ref = ptr_a_ref[:-1]
+                        logging.debug('Verifying that PTR reference %s matches A record %s',
+                                      ptr_a_ref, fqdn_or_ip)
+                        if fqdn_or_ip == ptr_a_ref:
+                            logging.debug('Adding PTR record to delete request')
+                            deletes['PTR'].append(ptr_record[0])
+                        else:
+                            logging.debug('PTR reference and original request do not match')
+                deletes['A'].extend(existing['record_ansr'])
+            if existing['record_type'] == 'CNAME':
+                logging.debug('Record type is CNAME')
+                deletes['CNAME'] = existing['record_ansr']
+            if existing['record_type'] == 'PTR':
+                logging.debug('Record type is PTR, looking for matching A record')
+                fqdn = existing['record_ansr'][0].split()[-1]
+                a_record = self.dig.find_record(fqdn)
+                if a_record:
+                    logging.debug('A record found: %s', a_record[0])
+                    a_ptr_ref = a_record[0].split()[-1]
+                    logging.debug('Comparing IP %s with A record ref %s', fqdn_or_ip, a_ptr_ref)
+                    if a_ptr_ref == fqdn_or_ip:
+                        logging.debug('Adding A record to delete request')
+                        deletes['A'].append(a_record[0])
+                    else:
+                        logging.debug('A reference and original request do not match')
+                deletes['PTR'].extend(existing['record_ansr'])
+        else:
+            return (False, 'Record does not exist')
+        logging.debug('Making call to remove records: %s', deletes)
+        return self._make_delete_call(deletes)
 
-    def query_dig(self, record_to_query, query_type=None):
+    def _make_delete_call(self, records_to_modify):
         """
-        Run dig and return answer or None if it doesn't exist
+        Create the nsupdate commands and make requested changes
+        Return tuple of form:
+            (boolean, None|string), where boolean is success|failure status
+            and string is the error message from nsupdate.
+        As multiple calls to nsupdate can be made, a failure in any
+        call will result in a failed return, and message will be a
+        concatenation of each of the calls.
+        All A and CNAME entries will be combined in one call, since
+        they are (by the nature of the previous search) part of the
+        same zone. Each PTR record will generate a separate call, since
+        it may not be true that PTR records are in the same zone.
         """
-        if not self.dig_command:
-            logging.debug('No access to dig command, unable to run queries')
-            return None
-        valid_query_types = ['A', 'PTR', 'CNAME']
-        dig_commands = self.dig_command + [record_to_query]
-        if query_type not in valid_query_types:
-            query_type = None
-        dig_after = ['+noall', '+answer']
-        if query_type:
-            dig_after.insert(0, query_type)
-        dig_commands.extend(dig_after)
-        logging.debug('Calling dig with following commands: %s', str(dig_commands))
-        dig_result = subprocess.run(dig_commands, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, universal_newlines=True)
-        return dig_result
+        success = True
+        message = None
+        commands = []
+        for a_rec in records_to_modify['A']:
+            fqdn = a_rec.split(' ')[0]
+            commands.append('update delete ' + fqdn + ' a')
+        for cname_rec in records_to_modify['CNAME']:
+            alias = cname_rec.split(' ')[0]
+            commands.append('update delete ' + alias + ' cname')
+        commands.append('send')
+        nsupdate_commands = '\n'.join(commands)
+        logging.debug('Sending following commands to nsupdate: %s', nsupdate_commands)
+        (success, message) = self.call_modify(nsupdate_commands)
+        commands = []
+        for ptr_rec in records_to_modify['PTR']:
+            ptr = ptr_rec.split(' ')[0]
+            commands.append('update delete ' + ptr + ' ptr')
+        commands.append('send')
+        nsupdate_commands = '\n'.join(commands)
+        logging.debug('Sending following commands to nsupdate: %s', nsupdate_commands)
+        (rev_success, rev_message) = self.call_modify(nsupdate_commands)
+        if not rev_success:
+            success = rev_success
+            if not message:
+                message = rev_message
+            else:
+                message += ' ' + rev_message
+        return (success, message)
 
     @staticmethod
     def hex_digest_format(domain_name):
@@ -312,7 +477,7 @@ class RNDC(object):
                     'catalog': None,
                    }
         self.info = {}
-        for key, value in defaults:
+        for key, value in defaults.items():
             self.info.setdefault(key, kwargs.get(key, value))
         self.info['port'] = str(self.info['port'])
         self.info['serial'] = str(self.info['serial'])
@@ -628,23 +793,44 @@ def parse_arguments():
     desc = 'mmbop manages BIND over Python'
     parser = argparse.ArgumentParser(description=desc, formatter_class=help_width)
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose messages')
-    parser.add_argument('-c', '--config', metavar='FILE', help='Location of mmbop config file',
+    parser.add_argument('-c', '--config', metavar='FILE', help='Location of config file',
                         default='./mmbop.ini')
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument('--status', action='store_true', help='Show status of DNS server')
-    group.add_argument('--hostquery', metavar='FQDN|IP', help='Query DNS for specified record')
-    group.add_argument('--hostadd', nargs=2, metavar=('FQDN', 'IP'), help='Add A and PTR record')
-    group.add_argument('--hostdelete', metavar='FQDN|IP', help='Delete A and PTR (provide either)')
-    group.add_argument('--hostlist', metavar='ZONE', help='List all records for specified zone')
-    group.add_argument('--zoneadd', metavar='ZONE', help='Add specified zone')
-    group.add_argument('--zonedelete', metavar='ZONE', help='Delete specified zone')
-    group.add_argument('--zonelist', action='store_true', help='List all zones')
-    group.add_argument('--zonesearch', nargs=2, metavar=('ZONE', 'SEARCH'),
-                       help='Wildcard searching of zone records')
-    group.add_argument('--zonestatus', metavar='ZONE', help='Show status of specified zone')
-    if len(sys.argv) == 1:    # No action is provided
-        parser.print_help(sys.stderr)
-        sys.exit(1)
+    #
+    subparsers = parser.add_subparsers(title='commands', description='DNS actions', dest='command',
+                                       help='add -h after command for additional information')
+    #
+    parser_status = subparsers.add_parser('status', help='Return status of BIND')
+    #
+    parser_query = subparsers.add_parser('query', help='Query for name or IP')
+    parser_query.add_argument('entry', metavar='FQDN|IP', help='Name or IP to search for')
+    parser_query.add_argument('--strict', action='store_true', help='Return name or IP only')
+    #
+    parser_hadd = subparsers.add_parser('hostadd', help='Add an A and PTR record')
+    parser_hadd.add_argument('fqdn', help='fully qualified domain name')
+    parser_hadd.add_argument('addr', help='IP address')
+    parser_hadd.add_argument('--force', action='store_true',
+                             help='Remove any existing records, if they exist')
+    #
+    parser_hdel = subparsers.add_parser('hostdel', help='Remove A and PTR record')
+    parser_hdel.add_argument('entry', metavar='fqdn|addr', help='Either FQDN or IP')
+    #
+    parser_hlist = subparsers.add_parser('hostlist', help='Show all records for zone')
+    parser_hlist.add_argument('zone')
+    #
+    parser_zadd = subparsers.add_parser('zoneadd', help='Add a zone')
+    parser_zadd.add_argument('zone')
+    #
+    parser_zdel = subparsers.add_parser('zonedel', help='Remove a zone')
+    parser_zdel.add_argument('zone')
+    #
+    parser_zlist = subparsers.add_parser('zonelist', help='Show all zones')
+    #
+    parser_zsearch = subparsers.add_parser('zonesearch', help='Wildcard search of a zone')
+    parser_zsearch.add_argument('zone')
+    parser_zsearch.add_argument('search')
+    #
+    parser_zstatus = subparsers.add_parser('zonestatus', help='Show status of a zone')
+    parser_zstatus.add_argument('zone')
     return parser.parse_args()
 
 def set_logging(debug_flag=False):
@@ -656,11 +842,11 @@ def set_logging(debug_flag=False):
     else:
         logging.basicConfig(level=logging.INFO)
 
-def hostquery(dig_instance, host_to_query):
+def query(dig_instance, host_to_query, strict_mode):
     """
-    Handle hostquery request
+    Handle query request
     """
-    replies = dig_instance.find_record(host_to_query)
+    replies = dig_instance.find_record(host_to_query, strict_mode)
     for line in replies:
         print(line)
 
@@ -678,8 +864,7 @@ def zonelist(rndc_instance):
     """
     zones = rndc_instance.list_zones()
     if not zones:
-        print('Unable to get list of zones. Run debug for more info.')
-        exit(1)
+        exit()
     zone_list = zones.split(' ')
     for zone in zone_list:
         print(zone)
@@ -708,20 +893,20 @@ def main():
     my_conf = read_config(my_args.config)
     my_dig = DigQuery()
     my_rndc = RNDC.create(**my_conf)
-    if my_args.hostquery:
-        hostquery(my_dig, my_args.hostquery)
-    if my_args.status:
+    if my_args.command == 'query':
+        query(my_dig, my_args.entry, my_args.strict)
+    if my_args.command == 'status':
         print(my_rndc.status())
-    if my_args.zonestatus:
-        print(my_rndc.zonestatus(my_args.zonestatus))
-    if my_args.zonesearch:
-        zonesearch(my_dig, my_args.zonesearch[0], my_args.zonesearch[1])
-    if my_args.zonelist:
+    if my_args.command == 'zonestatus':
+        print(my_rndc.zonestatus(my_args.zone))
+    if my_args.command == 'zonesearch':
+        zonesearch(my_dig, my_args.zone, my_args.search)
+    if my_args.command == 'zonelist':
         zonelist(my_rndc)
-    if my_args.zoneadd:
-        zonemodify(my_rndc, my_args.zoneadd)
-    if my_args.zonedelete:
-        zonemodify(my_rndc, my_args.zonedelete)
+    if my_args.command == 'zoneadd':
+        zonemodify(my_rndc, my_args.zone)
+    if my_args.command == 'zonedel':
+        zonemodify(my_rndc, my_args.zone)
 
 if __name__ == "__main__":
     main()

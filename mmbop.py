@@ -304,74 +304,78 @@ class NSUpdate(object):
             4. If removing an alias, just remove that (do not touch any
                related A/PTR records)
         """
-        logging.debug('Recieved request to delete %s', fqdn_or_ip)
-        deletes = {'A': [], 'PTR': [], 'CNAME': []}
-        existing = self._existing_record_info(fqdn_or_ip)
-        if existing:
-            logging.debug('Record found')
-            if existing['record_type'] == 'A':
-                logging.debug('Record type is A, looking for associated aliases')
-                associated_aliases = self._find_assoc_alias(fqdn_or_ip)
-                if associated_aliases:
-                    logging.debug('Found aliases %s', associated_aliases)
-                    if not force:
-                        return (False, 'Found associated aliases, use force to delete')
+        if isinstance(fqdn_or_ip, str):
+            fqdn_or_ip = [fqdn_or_ip]
+        for fq_or_i in fqdn_or_ip:
+            logging.debug('Recieved request to delete %s', fq_or_i)
+            deletes = {'A': [], 'PTR': [], 'CNAME': []}
+            existing = self._existing_record_info(fq_or_i)
+            if existing:
+                logging.debug('Record found')
+                if existing['record_type'] == 'A':
+                    logging.debug('Record type is A, looking for associated aliases')
+                    associated_aliases = self._find_assoc_alias(fq_or_i)
+                    if associated_aliases:
+                        logging.debug('Found aliases %s', associated_aliases)
+                        if not force:
+                            return (False, 'Found associated aliases, use force to delete')
+                        else:
+                            logging.debug('Adding aliases to delete request')
+                            deletes['CNAME'].extend(associated_aliases)
                     else:
-                        logging.debug('Adding aliases to delete request')
-                        deletes['CNAME'].extend(associated_aliases)
-                else:
-                    logging.debug('No associated aliases found')
-                logging.debug('Searching for matching PTR record')
-                for answer in existing['record_ansr']:
-                    ip_addr = answer.split()[-1]
+                        logging.debug('No associated aliases found')
+                    logging.debug('Searching for matching PTR record')
+                    for answer in existing['record_ansr']:
+                        ip_addr = answer.split()[-1]
+                        try:
+                            ip_addr = ipaddress.ip_address(ip_addr)
+                        except ValueError:
+                            logging.debug('Invalid IP address %s, ignoring', ip_addr)
+                            continue
+                        logging.debug('Looking for PTR record for %s', str(ip_addr))
+                        ptr_record = self.dig.find_record(str(ip_addr))
+                        if ptr_record:
+                            logging.debug('PTR record found')
+                            ptr_a_ref = ptr_record[0].split()[-1]
+                            if ptr_a_ref.endswith('.'):
+                                ptr_a_ref = ptr_a_ref[:-1]
+                            logging.debug('Verifying that PTR reference %s matches A record %s',
+                                          ptr_a_ref, fq_or_i)
+                            if fq_or_i == ptr_a_ref:
+                                logging.debug('Adding PTR record to delete request')
+                                deletes['PTR'].append(ip_addr.reverse_pointer)
+                            else:
+                                logging.debug('PTR reference and original request do not match')
+                    deletes['A'].append(fq_or_i)
+                if existing['record_type'] == 'CNAME':
+                    logging.debug('Record type is CNAME')
+                    deletes['CNAME'].append(fq_or_i)
+                if existing['record_type'] == 'PTR':
                     try:
-                        ip_addr = ipaddress.ip_address(ip_addr)
-                    except ValueError:
-                        logging.debug('Invalid IP address %s, ignoring', ip_addr)
-                        continue
-                    logging.debug('Looking for PTR record for %s', str(ip_addr))
-                    ptr_record = self.dig.find_record(str(ip_addr))
-                    if ptr_record:
-                        logging.debug('PTR record found')
-                        ptr_a_ref = ptr_record[0].split()[-1]
-                        if ptr_a_ref.endswith('.'):
-                            ptr_a_ref = ptr_a_ref[:-1]
-                        logging.debug('Verifying that PTR reference %s matches A record %s',
-                                      ptr_a_ref, fqdn_or_ip)
-                        if fqdn_or_ip == ptr_a_ref:
-                            logging.debug('Adding PTR record to delete request')
-                            deletes['PTR'].append(ip_addr.reverse_pointer)
-                        else:
-                            logging.debug('PTR reference and original request do not match')
-                deletes['A'].append(fqdn_or_ip)
-            if existing['record_type'] == 'CNAME':
-                logging.debug('Record type is CNAME')
-                deletes['CNAME'].append(fqdn_or_ip)
-            if existing['record_type'] == 'PTR':
-                try:
-                    ip_address = ipaddress.ip_address(fqdn_or_ip)
-                except ValueError as val_err:
-                    logging.debug('Reverse record is somehow not a valid IP? : %s', val_err)
-                    return None
-                logging.debug('Record type is PTR, looking for matching A record')
-                fqdn = existing['record_last'][0]
-                a_record = self.dig.find_record(fqdn)
-                if a_record:
-                    logging.debug('A record found: %s', a_record[0])
-                    for a_entry in a_record:
-                        a_ptr_ref = a_entry.split()[-1]
-                        logging.debug('Comparing IP %s with A record ref %s', fqdn_or_ip, a_ptr_ref)
-                        if a_ptr_ref == fqdn_or_ip:
-                            logging.debug('Adding A record to delete request')
-                            deletes['A'].append((fqdn, str(ip_address)))
-                            break
-                        else:
-                            logging.debug('A reference and original request do not match')
-                deletes['PTR'].append(ip_address.reverse_pointer)
-        else:
-            return (False, 'Record does not exist')
-        logging.debug('Making call to remove records: %s', deletes)
-        return self._make_delete_call(deletes)
+                        ip_address = ipaddress.ip_address(fq_or_i)
+                    except ValueError as val_err:
+                        logging.debug('Reverse record is somehow not a valid IP? : %s', val_err)
+                        return None
+                    logging.debug('Record type is PTR, looking for matching A record')
+                    fqdn = existing['record_last'][0]
+                    a_record = self.dig.find_record(fqdn)
+                    if a_record:
+                        logging.debug('A record found: %s', a_record[0])
+                        for a_entry in a_record:
+                            a_ptr_ref = a_entry.split()[-1]
+                            logging.debug('Comparing IP %s with A record ref %s',
+                                          fq_or_i, a_ptr_ref)
+                            if a_ptr_ref == fq_or_i:
+                                logging.debug('Adding A record to delete request')
+                                deletes['A'].append((fqdn, str(ip_address)))
+                                break
+                            else:
+                                logging.debug('A reference and original request do not match')
+                    deletes['PTR'].append(ip_address.reverse_pointer)
+            else:
+                return (True, 'Record does not exist')
+            logging.debug('Making call to remove records: %s', deletes)
+            return self._make_delete_call(deletes)
 
     def _make_add_call(self, records_to_modify, expire=86400):
         """
@@ -894,12 +898,16 @@ def parse_arguments():
     parser_hadd.add_argument('fqdn', help='fully qualified domain name')
     parser_hadd.add_argument('addr', nargs='+', help='One or more IP addresses')
     parser_hadd.add_argument('--force', action='store_true',
-                             help='Remove any existing records, if they exist')
+                             help='Replace any existing records, if they exist')
+    parser_hadd.add_argument('--range', metavar='N',
+                             help='Create N entries, incrementing fqdn by starting index')
     #
     parser_hdel = subparsers.add_parser('hostdel', help='Remove A and PTR record')
     parser_hdel.add_argument('entry', metavar='fqdn|addr', help='Either FQDN or IP')
     parser_hdel.add_argument('--force', action='store_true',
                              help='Remove associated aliases, if they exist')
+    parser_hdel.add_argument('--range', metavar='N',
+                             help='Delete N entries, incrementing fqdn by starting index')
     #
     parser_hlist = subparsers.add_parser('hostlist', help='Show all records for zone')
     parser_hlist.add_argument('zone')
@@ -965,7 +973,7 @@ def zonemodify(rndc_instance, zone_to_modify, delete=False):
     else:
         print('%s of zone %s succeeded' % (action, zone_to_modify))
 
-def host_list(dig_instance, search_zone, search_term=None, reverse=False):
+def hostlist(dig_instance, search_zone, search_term=None, reverse=False):
     """
     Handle hostlist request, returning on A/CNAME/PTR records
     """
@@ -978,6 +986,127 @@ def host_list(dig_instance, search_zone, search_term=None, reverse=False):
         if ' PTR ' in entry or '\tPTR\t' in entry:
             print(entry)
 
+def get_index_from_fqdn(fqdn):
+    """
+    Given a fully qualified domain name, extract the starting
+    index at the end of the shortname, if it exists, and return
+    a three-valued tuple of the form:
+        (shortname [minus the starting index], domain, starting_index)
+    starting_index is a string, to preserve the zero padding.
+    If the fqdn is malformed, return tuple filled with None.
+    """
+    try:
+        (shortname, domain) = fqdn.split('.', 1)
+    except ValueError:
+        logging.debug('FQDN not provided')
+        return (None, None, None)
+    starting_index = ''
+    for c_name in reversed(shortname):
+        if not c_name.isdigit():
+            break
+        starting_index = c_name + starting_index
+    if not starting_index:
+        logging.debug('No index marker found on name %s', fqdn)
+        return (None, None, None)
+    name_minus_index = shortname.rsplit(starting_index, 1)[0]
+    if not name_minus_index:
+        logging.debug('%s only consists of numbers, invalid for indexing', fqdn)
+        return (None, None, None)
+    logging.debug('shortname: %s, domain: %s, index: %s', name_minus_index,
+                  domain, starting_index)
+    return (name_minus_index, domain, starting_index)
+
+def hostdel_range(ns_instance, start_fqdn, num_entries, force=False):
+    """
+    Given a starting name, delete num_entries, incrementing the
+    index in the name by 1.
+    Requires that the end of start_fqdn contains 1 or more integers. The number
+    of leading zeros will determine the padding. For example:
+        start_fqdn = host003.example.com num_entries = 3
+        will delete:
+            host003.example.com
+            host004.example.com
+            host005.example.com
+    The entries are not pre-checked; force is passed to the delete_record
+    method to handle that.
+    """
+    (short_name, dom_name, starting_index) = get_index_from_fqdn(start_fqdn)
+    if not short_name:
+        return (False, 'Unable to determine index for name')
+    index_num = int(starting_index)
+    entries = []
+    for i in range(int(num_entries)):
+        del_entry = short_name + str(i + index_num).zfill(len(starting_index)) + '.' + dom_name
+        logging.debug('Preparing to delete entry %s', del_entry)
+        entries.append(del_entry)
+    for entry in entries:
+        logging.debug('Requesting to delete record %s', entry)
+        (status, output) = ns_instance.delete_record(entry, force)
+        if not status:
+            logging.debug('Unable to delete record, canceling range delete')
+            return (status, output)
+    logging.debug('All entries in range deleted successfully')
+    return (True, None)
+
+def hostadd_range(ns_instance, start_fqdn, start_ip, num_entries, force=False):
+    """
+    Given a starting name and IP address, create num_entries, incrementing the
+    index in the name by 1 and the IP by 1.
+    Requires that the end of start_fqdn contains 1 or more integers. The number
+    of leading zeros will determine the padding. For example:
+        start_fqdn = host003.example.com start_ip = 192.168.5.34 num_entries = 3
+        will create:
+            host003.example.com 192.168.5.34
+            host004.example.com 192.168.5.35
+            host005.example.com 192.168.5.36
+    All of the entries will be pre-checked before creating, for conflict with
+    existing forward or reverse entries.
+    """
+    (short_name, dom_name, starting_index) = get_index_from_fqdn(start_fqdn)
+    if not short_name:
+        return (False, 'Unable to determine index for name')
+    try:
+        if not isinstance(start_ip, str) and isinstance(start_ip, list):
+            start_ip = start_ip[0]
+        addr_start = ipaddress.ip_address(start_ip)
+    except ValueError:
+        return (False, 'Invalid IP provided')
+    index_num = int(starting_index)
+    entries = []
+    for i in range(int(num_entries)):
+        new_entry = (short_name + str(i + index_num).zfill(len(starting_index)) + '.' + dom_name,
+                     str(addr_start + i))
+        logging.debug('Preparing new entry %s', new_entry)
+        entries.append(new_entry)
+    existing_records = []
+    for entry in entries:
+        logging.debug('Checking %s for existing records', entry)
+        fw_entry = ns_instance.dig.find_record(entry[0], True)
+        rev_entry = ns_instance.dig.find_record(entry[1], True)
+        if fw_entry:
+            logging.debug('Existing record found: %s', fw_entry)
+            existing_records.append(fw_entry)
+        if rev_entry:
+            logging.debug('Existing record found %s', rev_entry)
+            existing_records.append(rev_entry)
+    if existing_records and not force:
+        logging.debug('Existing records and force not requested, denying add request')
+        return (False, 'Existing records, use force to replace them')
+    for to_delete in existing_records:
+        logging.debug('Requesting delete of existing record %s', to_delete)
+        (status, output) = ns_instance.delete_record(to_delete, True)
+        if not status:
+            logging.debug('Unable to delete record, canceling range add')
+            return (status, output)
+        logging.debug('Existing record %s deleted', to_delete)
+    for entry in entries:
+        logging.debug('Requesting to add record %s', entry)
+        (status, output) = ns_instance.add_record(entry[0], entry[1], True)
+        if not status:
+            logging.debug('Unable to add record, canceling range add')
+            return (status, output)
+    logging.debug('All entries in range added successfully')
+    return (True, None)
 
 def main():
     """
@@ -994,21 +1123,29 @@ def main():
     if my_args.command == 'status':
         print(my_rndc.status())
     if my_args.command == 'hostadd':
-        (success, message) = my_nsupdate.add_record(my_args.fqdn, my_args.addr, my_args.force)
+        if my_args.range:
+            (success, message) = hostadd_range(my_nsupdate, my_args.fqdn, my_args.addr,
+                                               my_args.range, my_args.force)
+        else:
+            (success, message) = my_nsupdate.add_record(my_args.fqdn, my_args.addr, my_args.force)
         if not success:
             print('Error: ' + message)
         elif message:
             print(message)
     if my_args.command == 'hostdel':
-        (success, message) = my_nsupdate.delete_record(my_args.entry, my_args.force)
+        if my_args.range:
+            (success, message) = hostdel_range(my_nsupdate, my_args.entry,
+                                               my_args.range, my_args.force)
+        else:
+            (success, message) = my_nsupdate.delete_record(my_args.entry, my_args.force)
         if not success:
             print('Error: ' + message)
         elif message:
             print(message)
     if my_args.command == 'hostlist':
-        host_list(my_dig, my_args.zone)
+        hostlist(my_dig, my_args.zone)
     if my_args.command == 'hostsearch':
-        host_list(my_dig, my_args.zone, my_args.search, my_args.reverse)
+        hostlist(my_dig, my_args.zone, my_args.search, my_args.reverse)
     if my_args.command == 'zonestatus':
         print(my_rndc.zonestatus(my_args.zone))
     if my_args.command == 'zonelist':

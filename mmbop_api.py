@@ -10,7 +10,7 @@ import mmbop
 # Pylint really doesn't like falcon, this is to silence false positives
 # pylint: disable=too-few-public-methods,c-extension-no-member,no-self-use,no-member
 
-class HandleCORS(object):
+class HandleCORS:
     """
     To enable all sites to reach the API, as it relies on
     token authentication for access control
@@ -28,7 +28,7 @@ class HandleCORS(object):
         if req.method == 'OPTIONS':
             raise falcon.http_status.HTTPStatus(falcon.HTTP_200, body='\n')
 
-class AuthToken(object):
+class AuthToken:
     """
     Implements simple authentication token
     """
@@ -81,7 +81,7 @@ class AuthToken(object):
         """
         return hashlib.sha224(str.encode(token)).hexdigest()
 
-class RNDCBase(object):
+class RNDCBase:
     """
     Base API class to initialize rndc
     """
@@ -89,7 +89,7 @@ class RNDCBase(object):
     def __init__(self, rndc_instance):
         self.rndc = rndc_instance
 
-class NSBase(object):
+class NSBase:
     """
     Base API class to initialize nsupdate
     """
@@ -97,7 +97,7 @@ class NSBase(object):
     def __init__(self, nsupdate_instance):
         self.nsupdate = nsupdate_instance
 
-class DIGBase(object):
+class DIGBase:
     """
     Base API class to initialize dig
     """
@@ -286,7 +286,7 @@ class HostSearch(DIGBase):
             }
         """
         reverse = False
-        domain = req.params.get('domain', None)
+        domain = self.fix_if_reverse(req.params.get('domain', None))
         term = req.params.get('term', None)
         search_term = term
         matched_entries = []
@@ -311,6 +311,24 @@ class HostSearch(DIGBase):
             except ValueError:
                 continue
         resp.body = json.dumps({'matched_entries': reply})
+
+    @staticmethod
+    def fix_if_reverse(zone_name):
+        """
+        If a user requests a search of a reverse zone, but
+        gives it as (for example) 192.168.1 instead of
+        1.168.192.in-addr.arpa, convert it to proper reverse
+        zone name format
+        """
+        zone_entries = zone_name.split('.', 3)
+        for zone_slice in zone_entries[:3]:
+            if not zone_slice.isdigit():
+                return zone_name
+        if 'in-addr.arpa' not in zone_entries:
+            new_zone = zone_entries[2] + '.' + zone_entries[1] + '.' + zone_entries[0]
+            new_zone += '.in-addr.arpa'
+            return new_zone
+        return zone_name
 
 class ZoneInfo(RNDCBase):
     """

@@ -33,15 +33,15 @@ import os
 import pwd
 import re
 import subprocess
+import sys
 from time import sleep
 
 class DigQueryError(Exception):
     """
     Error class for DigQuery
     """
-    pass
 
-class DigQuery(object):
+class DigQuery:
     """
     Instantiates a DNS querier using system dig
     """
@@ -65,7 +65,7 @@ class DigQuery(object):
         else:
             dig_command = self.command + command_to_dig + self.options
         reply = subprocess.run(dig_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               universal_newlines=True)
+                               check=True, universal_newlines=True)
         if reply.returncode == 0:
             return (True, reply.stdout)
         return (False, reply.stderr)
@@ -140,9 +140,8 @@ class NSUpdateError(Exception):
     """
     Error class for NSUpdate
     """
-    pass
 
-class NSUpdate(object):
+class NSUpdate:
     """
     Handles communication with nsupdate
     """
@@ -178,7 +177,7 @@ class NSUpdate(object):
         """
         nsupdate_form = self.format_catalog(catalog_zone, domain, action)
         reply = subprocess.run(self.command, encoding='utf-8', input=nsupdate_form,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                               check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if reply.returncode == 0:
             logging.debug('nsupdate completed successfully: %s', reply.stdout)
             return (True, None)
@@ -190,7 +189,7 @@ class NSUpdate(object):
         Send commands to nsupdate (for add/delete of A/CNAME/PTR records)
         """
         reply = subprocess.run(self.command, encoding='utf-8', input=commands,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                               check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if reply.returncode == 0:
             logging.debug('nsupdate completed successfully: %s', reply.stdout)
             return (True, None)
@@ -347,9 +346,8 @@ class NSUpdate(object):
                         logging.debug('Found aliases %s', associated_aliases)
                         if not force:
                             return (False, 'Found associated aliases, use force to delete')
-                        else:
-                            logging.debug('Adding aliases to delete request')
-                            deletes['CNAME'].extend(associated_aliases)
+                        logging.debug('Adding aliases to delete request')
+                        deletes['CNAME'].extend(associated_aliases)
                     else:
                         logging.debug('No associated aliases found')
                     logging.debug('Searching for matching PTR record')
@@ -397,8 +395,7 @@ class NSUpdate(object):
                                 logging.debug('Adding A record to delete request')
                                 deletes['A'].append((fqdn, str(ip_address)))
                                 break
-                            else:
-                                logging.debug('A reference and original request do not match')
+                            logging.debug('A reference and original request do not match')
                     deletes['PTR'].append(ip_address.reverse_pointer)
             else:
                 return (False, 'Record does not exist')
@@ -545,9 +542,8 @@ class RNDCError(Exception):
     """
     Error class for RNDC
     """
-    pass
 
-class RNDC(object):
+class RNDC:
     """
     Handles communication with rndc
     """
@@ -651,7 +647,7 @@ class RNDC(object):
         elif isinstance(rndc_command, str):
             command.append(rndc_command)
         logging.debug('Calling rndc with following options: %s', command)
-        return subprocess.run(command, stdout=subprocess.PIPE,
+        return subprocess.run(command, stdout=subprocess.PIPE, check=True,
                               stderr=subprocess.PIPE, universal_newlines=True)
 
 
@@ -1006,7 +1002,7 @@ def zonelist(rndc_instance):
     """
     zones = rndc_instance.list_zones()
     if not zones:
-        exit()
+        sys.exit()
     for zone in zones:
         print(zone)
 

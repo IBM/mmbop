@@ -1207,7 +1207,7 @@ def main():
     if my_args.command == 'zoneadd':
         zonemodify(my_rndc, my_args.zone)
     if my_args.command == 'zonedel':
-        zonemodify(my_rndc, my_args.zone)
+        zonemodify(my_rndc, my_args.zone, True)
 
 if __name__ == "__main__":
     main()

@@ -378,11 +378,10 @@ class ZoneModify(RNDCBase):
             (success, message) = self.rndc.add(zone_name)
             if success:
                 resp.status = falcon.HTTP_201
-                resp.location = self.rndc.zonestatus(zone_name)
-                resp.body = (message)
+                resp.body = json.dumps({'result': [{'success': True, 'message': message}]})
             else:
                 resp.status = falcon.HTTP_400
-                resp.body = (message)
+                resp.body = json.dumps({'result': [{'success': False, 'message': message}]})
 
     def on_delete(self, req, resp):
         """
@@ -395,10 +394,10 @@ class ZoneModify(RNDCBase):
         else:
             (success, message) = self.rndc.delete(zone_name)
             if success:
-                resp.body = (message)
+                resp.body = json.dumps({'result': [{'success': True, 'message': message}]})
             else:
                 resp.status = falcon.HTTP_400
-                resp.body = (message)
+                resp.body = json.dumps({'result': [{'success': True, 'message': message}]})
 
 
 CONF_FILE = './mmbop.ini'

@@ -252,10 +252,41 @@ Not a valid zone name. Check configuration.
 
 **Current list of API functions and their allowed methods:**
 
-- /status [GET]
-- /modify [POST for add, DELETE for delete]
-- /zonelist [GET]
-- /zoneinfo/{domain} [GET]
+- /query
+    - equivalent to: mmbop query <entry>
+    - GET
+    - Required params: entry
+- /status
+    - equivalent to: mmbop status
+    - GET
+- /hostmodify
+    - equivalent to: mmbop hostadd <fqdn> <add> or mmbop hostdel <fqdn|addr>
+    - POST (adding entries), DELETE (removing entries)
+    - Required params: fqdn, addr (if POST)
+    - Optional params: force
+- /alias
+    - equivalent to: mmbop alias <alias> <real>
+    - POST (adding entries; for removing, use /hostmodify)
+    - Required params: alias, real
+    - Optional params: force
+- /hostlist/{domain}
+    - equivalent to: mmbop <domain>
+    - GET
+- /hostsearch
+    - equivalent to: mmbop <domain> <term>
+    - GET
+    - Required params: domain
+    - Optional params: term
+- /zonemodify
+    - equivalent to: mmbop zoneadd <domain> or mmbop zonedel <domain>
+    - POST (adding zones), DELETE (removing zones)
+    - Required params: domain
+- /zonelist
+    - equivalent to: mmbop zonelist
+    - GET
+- /zoneinfo/{domain}
+    - equivalent to: mmbop zonestatus <domain>
+    - GET
 
 ## Built With
 
@@ -272,6 +303,5 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md
 
 ## Acknowledgments
 
-* Without an internet search engine none of this would be possible
-* Thanks to dnspython I was able to reverse engineer the weird 'wire format' required for catalog zone entries
+* Thanks to [dnspython](http://www.dnspython.org/) I was able to reverse engineer the weird 'wire format' required for catalog zone entries
 * [This](https://gist.github.com/PurpleBooth/109311bb0361f32d87a2) nice README template

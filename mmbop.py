@@ -647,7 +647,7 @@ class RNDC:
         elif isinstance(rndc_command, str):
             command.append(rndc_command)
         logging.debug('Calling rndc with following options: %s', command)
-        return subprocess.run(command, stdout=subprocess.PIPE, check=True,
+        return subprocess.run(command, stdout=subprocess.PIPE, check=False,
                               stderr=subprocess.PIPE, universal_newlines=True)
 
 

@@ -98,25 +98,24 @@ The .ini file comments explain each option, but the 2 least obvious ones (as the
 **Step 2 : Verify by running mmbop for server status**
 
 ```
-$ ./mmbop.py -s
-version: BIND 9.14.4-Ubuntu (Stable Release) <id:ab4c496>
-running on netdev-swtest: Linux x86_64 4.15.0-58-generic #64-Ubuntu SMP Tue Aug 6 11:12:41 UTC 2019
-boot time: Wed, 21 Aug 2019 13:41:16 GMT
-last configured: Wed, 21 Aug 2019 13:41:16 GMT
+# python mmbop.py status
+version: BIND 9.14.5-Ubuntu (Stable Release) <id:c2c2b6d>
+running on example_server: Linux x86_64 4.15.0-62-generic #69-Ubuntu SMP Wed Sep 4 20:55:53 UTC 2019
+boot time: Fri, 22 Nov 2019 21:43:09 GMT
+last configured: Tue, 14 Jan 2020 19:09:32 GMT
 configuration file: /etc/bind/named.conf
 CPUs found: 2
 worker threads: 2
 UDP listeners per interface: 2
-number of zones: 32 (0 automatic)
+number of zones: 14 (0 automatic)
 debug level: 0
 xfers running: 0
 xfers deferred: 0
 soa queries in progress: 0
 query logging is OFF
 recursive clients: 0/900/1000
-tcp clients: 2/150
+tcp clients: 4/150
 server is up and running
-until finished
 ```
 If you see output similar to the example above, congrats you have a working mmbop setup.
 If this doesn't work, run with verbose logging (*-v*) for more details on the problem.
@@ -128,33 +127,31 @@ Given what mmbop is required to do to add a domain, it is necessary to run as a 
 You can run it as root (sudo), or - from root - you can sudo and run as the same user that owns the BIND service and files. By default, on Ubuntu this is the *bind* user, which is created when you install BIND.
 
 ```
-# sudo -u bind /var/cache/bind/mmbop.py -c /var/cache/bind/mmbop.ini -a nina.example.com
-Zone nina.example.com added
+# python mmbop.py zoneadd nina.example.com
+Add of zone nina.example.com succeeded
 
-$ ./mmbop.py -z nina.example.com
+# python mmbop.py zonestatus nina.example.com
 name: nina.example.com
 type: master
-files: /etc/bind/nina.example.com.db
+files: nina.example.com.db
 serial: 1
 nodes: 1
-last loaded: Thu, 22 Aug 2019 20:34:43 GMT
+last loaded: Tue, 14 Jan 2020 19:07:45 GMT
 secure: no
 dynamic: yes
 frozen: no
 reconfigurable via modzone: yes
-
 ```
 
 **Step 4 : Remove a zone**
 
 ```
-# sudo -u bind /var/cache/bind/mmbop.py -c /var/cache/bind/mmbop.ini -d nina.example.com
-Zone nina.example.com deleted
+# python mmbop.py zonedel nina.example.com
+Deletion of zone nina.example.com succeeded
 
-$ ./mmbop.py -z nina.example.com
+# python mmbop.py zonestatus nina.example.com
 rndc: 'zonestatus' failed: not found
 no matching zone 'nina.example.com' in any view
-
 ```
 
 **Step 5 : Explore**
@@ -162,23 +159,38 @@ no matching zone 'nina.example.com' in any view
 Run with *-h* or *--help* to see all of the available command-line options
 
 ```
-$ ./mmbop.py -h
-usage: mmbop.py [-h] [-v] [-c FILE] [-a ZONE | -d ZONE | -l | -s | -z ZONE]
+$ python mmbop.py --help
+usage: mmbop.py [-h] [-v] [-c FILE]
+                {status,query,hostadd,alias,hostdel,hostlist,hostsearch,zoneadd,zonedel,zonelist,zonestatus}
+                ...
 
 mmbop manages BIND over Python
 
 optional arguments:
-  -h, --help                  show this help message and exit
-  -v, --verbose               Enable verbose messages
-  -c FILE, --config FILE      Location of mmbop config file
-  -a ZONE, --add ZONE         Add specified zone
-  -d ZONE, --delete ZONE      Delete specified zone
-  -l, --list                  List all zones
-  -s, --status                Show status of DNS server
-  -z ZONE, --zonestatus ZONE  Show status of specified zone
+  -h, --help                      show this help message and exit
+  -v, --verbose                   Enable verbose messages
+  -c FILE, --config FILE          Location of config file
+
+commands:
+  DNS actions
+
+  {status,query,hostadd,alias,hostdel,hostlist,hostsearch,zoneadd,zonedel,zonelist,zonestatus}
+                                  add -h after command for additional
+                                  information
+    status                        Return status of BIND
+    query                         Query for name or IP
+    hostadd                       Add an A and PTR record
+    alias                         Add a CNAME record
+    hostdel                       Remove CNAME or A and PTR record
+    hostlist                      Show all records for zone
+    hostsearch                    Wildcard search of a zone
+    zoneadd                       Add a zone
+    zonedel                       Remove a zone
+    zonelist                      Show all zones
+    zonestatus                    Show status of a zone
 ```
 
-Note that the list option, *-l*, will only show the domains that mmbop can manage (using same validation criteria as for adding/removing zones) - see above for the protect/require configuration. Also note that list works by running 'rndc dumpdb -zones' and then parses this file to obtain the applicable domains. It has to wait for the dump file to complete writing, which can take a surprisingly long (relatively speaking) time - 6+ seconds if you have a lot of large zone files.
+Note that the *zonelist* option will only show the domains that mmbop can manage (using same validation criteria as for adding/removing zones) - see above for the protect/require configuration. Also note that list works by running 'rndc dumpdb -zones' and then parses this file to obtain the applicable domains. It has to wait for the dump file to complete writing, which can take a surprisingly long (relatively speaking) time - 6+ seconds if you have a lot of large zone files.
 
 ## API
 

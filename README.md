@@ -307,7 +307,7 @@ Not a valid zone name. Check configuration.
 
 ## Authors
 
-* **Scott Strattner ** - [IBM Github](https://github.ibm.com/sstrattn)
+* **Scott Strattner** - [IBM Github](https://github.ibm.com/sstrattn)
 
 ## License
 

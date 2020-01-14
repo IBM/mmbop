@@ -1,6 +1,6 @@
 # mmbop
 
-Dynamic DNS ([RFC 2136](https://tools.ietf.org/html/rfc2136)) provides a mechanism for updating entries in a zone file without needing to edit that file by hand and without needing to restart BIND. For Python users, the [dnspython](http://www.dnspython.org/) module provides a valuable foundation for creating dynamic DNS applications. However there are some things that dnspython and dynamic DNS cannot do - specifically, the creation of new authoratative zones.
+Dynamic DNS ([RFC 2136](https://tools.ietf.org/html/rfc2136)) provides a mechanism for updating entries in a zone file without needing to edit that file by hand and without needing to restart BIND. For Python users, the [dnspython](http://www.dnspython.org/) module provides a valuable foundation for creating dynamic DNS applications. However there are some things that dnspython and dynamic DNS cannot do - specifically, the creation of new authoritative zones.
 
 BIND does come with a program, rndc, that can control various aspects of the name service, locally or remotely. One of the functions is adding a zone. However the command relies on the fact that the empty zone file already exists. So there is a need for a program to wrap rndc functionality and provide push button capability to add/remove zones. This is the purpose of mmbop.
 
@@ -20,7 +20,7 @@ controls {
 };
 ```
 
-If you are running BIND version 9.11.0 or later and wish to take advantage of the catalog zone feature (allowing you to automatically update secondary nameservers with the new zones you have created), the appropriate configuration is require on both the primary and secondary server(s).
+If you are running BIND version 9.11.0 or later and wish to take advantage of the catalog zone feature (allowing you to automatically update secondary nameservers with the new zones you have created), the appropriate configuration is required on both the primary and secondary server(s).
 
 Primary (for example sake, this has IP 10.1.1.1):
 ```

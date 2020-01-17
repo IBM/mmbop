@@ -1,6 +1,7 @@
 """
 Uses Falcon to implement simple API wrapper for mmbop
 """
+import ipaddress
 import configparser
 import hashlib
 import json
@@ -287,7 +288,7 @@ class HostSearch(DIGBase):
         """
         reverse = False
         domain = self.fix_if_reverse(req.params.get('domain', None))
-        term = req.params.get('term', None)
+        term = self.reverse_if_ip(domain, req.params.get('term', None))
         search_term = term
         matched_entries = []
         reply = []
@@ -329,6 +330,22 @@ class HostSearch(DIGBase):
             new_zone += '.in-addr.arpa'
             return new_zone
         return zone_name
+
+    @staticmethod
+    def reverse_if_ip(domain, search_term):
+        """
+        If the user is searching a reverse zone (*.in-addr.arpa),
+        and the search term is an IP address, reverse it so that
+        it can be found.
+        """
+        reverse_domain_tag = '.in-addr.arpa'
+        if reverse_domain_tag in domain:
+            try:
+                search_is_ip = ipaddress.ip_address(search_term).reverse_pointer
+                return search_is_ip.replace(reverse_domain_tag, '')
+            except ValueError:
+                pass
+        return search_term
 
 class ZoneInfo(RNDCBase):
     """

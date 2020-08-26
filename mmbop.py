@@ -224,21 +224,22 @@ class NSUpdate:
         reply_dict = {}
         if not dig_reply:
             return None
-        if ' CNAME ' in dig_reply[0] or '\tCNAME\t' in dig_reply[0]:
+        first_response = dig_reply[0].replace('\t', ' ')
+        if ' CNAME ' in first_response:
             logging.debug('Entry is alias - CNAME - record')
             reply_dict = {
                 'record_type': 'CNAME',
-                'record_ansr': dig_reply[0],
-                'record_last': dig_reply[0].split()[-1]
+                'record_ansr': first_response,
+                'record_last': first_response.split()[-1]
                 }
-        elif ' A ' in dig_reply[0] or '\tA\t' in dig_reply[0]:
+        elif ' A ' in first_response:
             logging.debug('Entry is forward - A - record')
             reply_dict = {
                 'record_type': 'A',
                 'record_ansr': dig_reply,
                 'record_last': [x.split()[-1] for x in dig_reply]
                 }
-        elif ' PTR ' in dig_reply[0] or '\tPTR\t' in dig_reply[0]:
+        elif ' PTR ' in first_response:
             logging.debug('Entry is reverse - PTR - record')
             reply_dict = {
                 'record_type': 'PTR',
@@ -277,7 +278,7 @@ class NSUpdate:
         adds = []
         logging.debug('Request to add A record %s %s', fqdn, addr)
         existing_forward = self._existing_record_info(fqdn)
-        if existing_forward:
+        if existing_forward and not '*' in fqdn:
             if not force:
                 return (False, 'Existing A record found, use force to replace')
             (for_del_status, for_del_message) = self.delete_record(fqdn, force)
@@ -287,7 +288,7 @@ class NSUpdate:
             addr = [addr]
         for ip_addr in addr:
             existing_reverse = self._existing_record_info(ip_addr)
-            if existing_reverse:
+            if existing_reverse and not '*' in fqdn:
                 if not force:
                     return (False, 'Existing PTR record found, use force to replace')
                 (rev_del_status, rev_del_message) = self.delete_record(ip_addr, force)
@@ -830,10 +831,12 @@ class RNDC:
         Return boolean on success of zone file removal
         """
         file_path = self.info['namedir'] + zone_name + '.db'
+        journal_path = file_path + '.jnl'
         try:
             os.remove(file_path)
+            os.remove(journal_path)
         except (OSError, IOError) as io_os_err:
-            logging.debug('Error in deleting zone file %s: %s', file_path, io_os_err)
+            logging.debug('Error in deleting zone or journal file for %s: %s', zone_name, io_os_err)
             return False
         return True
 

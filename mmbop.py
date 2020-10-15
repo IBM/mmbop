@@ -824,7 +824,7 @@ class RNDC:
             logging.debug('Error in writing zone file %s', io_os_err)
             return None
         #return file_path
-        return zone_name + '.db'
+        return file_path
 
     def delete_zone_file(self, zone_name):
         """

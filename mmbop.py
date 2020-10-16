@@ -680,7 +680,7 @@ class RNDC:
         Looks for last line of named dump file, indicating completion
         """
         end_of_file = '; Dump complete'
-        last_line = os.popen('tail -1 ' + dump_file).read().rstrip()
+        last_line = os.popen('/usr/bin/tail -1 ' + dump_file).read().rstrip()
         if last_line == end_of_file:
             return True
         return False
